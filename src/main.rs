@@ -81,6 +81,21 @@ enum NamedExpr {
 enum Expr {
     Eq(NamedExpr, NamedExpr),
 }
+
+fn col(name: &str) -> NamedExpr {
+    NamedExpr::Column(name.to_string())
+}
+
+fn lit(value: FheUint256) -> NamedExpr {
+    NamedExpr::Literal(value)
+}
+
+impl NamedExpr {
+    fn eq(self, other: NamedExpr) -> Expr {
+        Expr::Eq(self, other)
+    }
+}
+
 impl FheDataFrame {
     fn count(&self) -> Uint8 {
         let one = FheUint8::encrypt(1_u8, &self.public_key);
@@ -99,11 +114,8 @@ impl FheDataFrame {
     fn filter(&mut self, expr: Expr) -> &mut Self {
         let default_false = FheBool::encrypt(false, &self.public_key);
         for (i, row) in self.rows.iter().enumerate() {
-            for (column_name, value) in row.iter() {
-                self.row_mask[i] =
-                    self.row_mask[i].clone() | self.eval_expr(&expr, row, default_false.clone());
-                // println!("{}, {:?}", column_name, value.value.data);
-            }
+            self.row_mask[i] =
+                self.row_mask[i].clone() | self.eval_expr(&expr, row, default_false.clone());
         }
 
         self
@@ -226,19 +238,15 @@ fn main() {
     let mut df = create_test_instance(public_key);
 
     let counts = df
-        .filter(Expr::Eq(
-            NamedExpr::Column("TargetProcessSHA256".to_string()),
-            NamedExpr::Literal(FheUint256 {
-                data: sha256_str_to_fhe(
-                    "027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a745",
-                    &df.public_key,
-                ),
-            }),
-        ))
+        .filter(col("TargetProcessSHA256").eq(lit(FheUint256 {
+            data: sha256_str_to_fhe(
+                "027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a745",
+                &df.public_key,
+            ),
+        })))
         .count();
 
     let c: u8 = counts.decrypt(&client_key);
 
     println!("counts: {}", c);
-
-    }
+}
