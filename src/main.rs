@@ -1,8 +1,15 @@
+use bincode;
 use hex::FromHex;
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+use serde_json;
 use std::collections::HashMap;
 use std::convert::TryInto;
-use tfhe::prelude::*;
+use std::fs::File;
+use std::io::{Read, Write};
+use tfhe::boolean::public_key;
 use tfhe::{generate_keys, set_server_key, ConfigBuilder, FheBool, FheUint32, FheUint8, PublicKey};
+use tfhe::{prelude::*, ClientKey, ServerKey};
 
 fn sha256_str_to_bytes(hash_value: &str) -> Result<[u8; 32], hex::FromHexError> {
     let bytes = Vec::from_hex(hash_value)?;
@@ -13,23 +20,29 @@ fn sha256_str_to_bytes(hash_value: &str) -> Result<[u8; 32], hex::FromHexError> 
     Ok(array)
 }
 
-trait IfThenElse {
-    fn if_then_else<T>(self, then_branch: T, else_branch: T) -> T;
+fn sha256_str_to_fhe(hash_value: &str, public_key: &PublicKey) -> [FheUint8; 32] {
+    let data = sha256_str_to_bytes(hash_value).unwrap();
+
+    data.map(|x| FheUint8::encrypt(x, public_key))
 }
 
-impl IfThenElse for bool {
-    fn if_then_else<T>(self, then_branch: T, else_branch: T) -> T {
-        if self {
-            then_branch
-        } else {
-            else_branch
-        }
-    }
-}
+//trait IfThenElse {
+//    fn if_then_else<T>(self, then_branch: T, else_branch: T) -> T;
+//}
+//
+//impl IfThenElse for bool {
+//    fn if_then_else<T>(self, then_branch: T, else_branch: T) -> T {
+//        if self {
+//            then_branch
+//        } else {
+//            else_branch
+//        }
+//    }
+//}
 
-// type Uint8 = FheUint8;
-type Uint8 = u8;
-type Bool = bool;
+type Uint8 = FheUint8;
+// type Uint8 = u8;
+type Bool = FheBool;
 
 #[derive(Clone)]
 struct FheUint256 {
@@ -57,6 +70,7 @@ struct FheDataFrame {
     names: Vec<String>,
     rows: Vec<Row>,
     row_mask: Vec<Bool>,
+    public_key: PublicKey,
 }
 
 enum NamedExpr {
@@ -68,37 +82,31 @@ enum Expr {
     Eq(NamedExpr, NamedExpr),
 }
 impl FheDataFrame {
-    // mask ...
-
     fn count(&self) -> Uint8 {
-        let mut sum: Uint8 = 0;
+        let one = FheUint8::encrypt(1_u8, &self.public_key);
+        let zero = FheUint8::encrypt(0_u8, &self.public_key);
+
+        let mut sum: Uint8 = zero.clone();
 
         for mask in &self.row_mask {
-            println!("mask = {}", mask);
-            sum = sum + mask.if_then_else(1, 0);
+            sum = sum + mask.if_then_else(&one, &zero);
         }
 
-        return 0;
+        sum
     }
 
     // row filter op
     fn filter(&mut self, expr: Expr) -> &mut Self {
+        let default_false = FheBool::encrypt(false, &self.public_key);
         for (i, row) in self.rows.iter().enumerate() {
             for (column_name, value) in row.iter() {
-                self.row_mask[i] = self.row_mask[i] | self.eval_expr(&expr, row, false);
-                println!("{}, {:?}", column_name, value.value.data);
+                self.row_mask[i] =
+                    self.row_mask[i].clone() | self.eval_expr(&expr, row, default_false.clone());
+                // println!("{}, {:?}", column_name, value.value.data);
             }
         }
 
         self
-    }
-
-    fn new() -> Self {
-        FheDataFrame {
-            names: Vec::new(),
-            rows: Vec::new(),
-            row_mask: Vec::new(),
-        }
     }
 
     fn eval_expr(&self, expr: &Expr, row: &Row, default_false: Bool) -> Bool {
@@ -120,87 +128,117 @@ impl FheDataFrame {
     }
 }
 
-fn get_test_data() -> [u8; 32] {
-    let hash_hex = "a3c16a54e2e8d6dfb0f1cc1d4f69f9a9f1b0f6a7929fb923f2e4b6b58c985a29";
-
-    sha256_str_to_bytes(hash_hex).unwrap()
-}
-
-fn create_test_instance() -> FheDataFrame {
+fn create_test_instance(public_key: PublicKey) -> FheDataFrame {
     // Create a test instance of FheUint256
-    let fhe_value = vec![
+    let values = vec![
         FheUint256 {
-        data: sha256_str_to_bytes(
-            "027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a745",
-        )
-        .unwrap(),
-    }];
+            data: sha256_str_to_fhe(
+                "027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a745",
+                &public_key,
+            ),
+        },
+        FheUint256 {
+            data: sha256_str_to_fhe(
+                "027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a745",
+                &public_key,
+            ),
+        },
+        FheUint256 {
+            data: sha256_str_to_fhe(
+                "027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a746",
+                &public_key,
+            ),
+        },
+        FheUint256 {
+            data: sha256_str_to_fhe(
+                "027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a744",
+                &public_key,
+            ),
+        },
+        FheUint256 {
+            data: sha256_str_to_fhe(
+                "027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a743",
+                &public_key,
+            ),
+        },
+    ];
 
     // let value_instance = Value { value: fhe_value };
 
+    let mut rows: Vec<Row> = Vec::new();
 
-    let mut row_instance = Row::new();
-    for value in fhe_value {
-        row_instance.insert("TargetProcessSHA256".to_string(), Value{value: value});
-    };
+    for value in values {
+        let mut row_instance = Row::new();
+        row_instance.insert("TargetProcessSHA256".to_string(), Value { value: value });
+        rows.push(row_instance);
+    }
+
+    let default_false = FheBool::encrypt(false, &public_key);
 
     // Create a FheDataFrame instance
     let dataframe_instance = FheDataFrame {
         names: vec!["TargetProcessSHA256".to_string()],
-        rows: vec![row_instance],
-        row_mask: vec![false, false, false, false, false],
+        rows: rows,
+        row_mask: vec![
+            default_false.clone(),
+            default_false.clone(),
+            default_false.clone(),
+            default_false.clone(),
+            default_false.clone(),
+        ],
+        public_key: public_key,
     };
 
     dataframe_instance
 }
 
+fn dump_to_file<T: Serialize>(key: &T, filename: &str) {
+    let encoded: Vec<u8> = bincode::serialize(key).unwrap();
+    let mut file = File::create(filename).unwrap();
+    file.write_all(&encoded).unwrap();
+}
+
+fn read_from_file<T: DeserializeOwned>(filename: &str) -> T {
+    let mut file = File::open(filename).unwrap();
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer).unwrap();
+    let key: T = bincode::deserialize(&buffer).unwrap();
+    key
+}
 
 fn main() {
-    let mut df = create_test_instance();
+    let config = ConfigBuilder::default().build();
+
+    // Client-side
+    //let (client_key, server_key) = generate_keys(config);
+    //let public_key = PublicKey::new(&client_key);
+
+    //dump_to_file(&client_key, "client_key.bincode");
+    //dump_to_file(&server_key, "server_key.bincode");
+    //dump_to_file(&public_key, "public_key.bincode");
+
+    let client_key: ClientKey = read_from_file("client_key.bincode");
+    let server_key: ServerKey = read_from_file("server_key.bincode");
+    let public_key: PublicKey = read_from_file("public_key.bincode");
+
+    set_server_key(server_key);
+
+    let mut df = create_test_instance(public_key);
 
     let counts = df
         .filter(Expr::Eq(
             NamedExpr::Column("TargetProcessSHA256".to_string()),
             NamedExpr::Literal(FheUint256 {
-                data: sha256_str_to_bytes(
+                data: sha256_str_to_fhe(
                     "027cc450ef5f8c5f653329641ec1fed91f694e0d229928963b30f6b0d7d3a745",
-                )
-                .unwrap(),
+                    &df.public_key,
+                ),
             }),
         ))
         .count();
 
-    println!("{:?}", counts);
+    let c: u8 = counts.decrypt(&client_key);
 
-    //let config = ConfigBuilder::default().build();
+    println!("counts: {}", c);
 
-    //// Client-side
-    //let (client_key, server_key) = generate_keys(config);
-
-    //let public_key = PublicKey::new(&client_key);
-
-    //let data = get_test_data();
-    //let data2 = get_test_data();
-
-    //let encrypted_data = data.map(|x| FheUint8::encrypt(x, &public_key));
-
-    // //Server-side
-    // set_server_key(server_key);
-
-    // let server_encrypted_data = data2.map(|x| FheUint8::encrypt(x, &public_key));
-
-    // let result = encrypted_data
-    //     .iter()
-    //     .zip(server_encrypted_data.iter())
-    //     .map(|(a, b)| a.eq(b))
-    //     .reduce(|acc, x| acc & x)
-    //     .unwrap_or(FheBool::encrypt(false, &public_key));
-
-    // let decrypted_result = result.decrypt(&client_key);
-
-    // if decrypted_result {
-    //     println!("The two SHA256 hashes are the same.")
-    // } else {
-    //     println!("The two SHA256 hashes are not the same.")
-    // }
-}
+    }
