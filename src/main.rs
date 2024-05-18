@@ -2,7 +2,6 @@ use bincode;
 use hex::FromHex;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
