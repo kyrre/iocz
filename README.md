@@ -1,10 +1,9 @@
 # iocz
-
-The original goal of this project was to create a way to express detection queries on encrypted data using backend-agnostic APIs (e.g., Apache Spark, Snowflake, BigQuery, DuckDB, Polars, Theseus) like those provided by the Ibis Python DataFrame.
+The initial goal of this project was to enable detection queries on encrypted data using backend-agnostic APIs, such as Apache Spark, Snowflake, BigQuery, DuckDB, Polars, and Theseus, facilitated by the Ibis Python DataFrame.
 
 
 ## Background 
-The way (cyber) threat detection and response is done at scale is either to collect logs in a SIEM like Splunk or Elastic (traditional) or a in cloud native warehouse or object store (modern) and use SQL or DataFrame API to build and execute queries. Detection rules that look for know bad or suspicious behaviour are then expressed as queries, e.g., using Snowflake's SQL dialect (from panther's repo):
+Cyber threat detection and response at scale typically involve collecting logs in a SIEM like Splunk or Elastic (traditional) or in a cloud-native warehouse or object store (modern). SQL or DataFrame APIs are used to build and execute queries. Detection rules for known bad or suspicious behavior are expressed as queries, such as the following example using Snowflake's SQL dialect from Panther's repository:
 
 ```sql
  SELECT
@@ -28,12 +27,11 @@ The way (cyber) threat detection and response is done at scale is either to coll
     */
     and p_occurs_since('1 day')
 ```
-These queries can be quite complex and join together multiple raw log sources or external data tables that enrich the logs or they can be simple matches such count all instances where a process with a specific hash was executed. 
+These queries can be complex, joining multiple raw log sources or external data tables to enrich the logs, or simple, such as counting all instances where a process with a specific hash was executed.
 
-Certain critical companies often send data to goverment agencies who have classified detection rules, e.g,. Windows PE hash values or domain names that are currently used by APT's. These must never be shared. 
+Certain critical companies (energy, banking, public infra) often send data to government agencies that have classified detection rules, such as a list of Windows PE hash values or domain names currently used by APTs. These must never be shared.
 
-Here is a simple flow chart where a one-way data diode to ensure that traffic only flows one way.
-
+Below is a simple flow chart illustrating a one-way data diode to ensure that traffic flows in only one direction.
 ```mermaid 
 
 graph TD
@@ -44,8 +42,7 @@ graph TD
 ```
 
 ## DataFrames
-
-Instead of using SQL directly we can use the dataframe library ibis to build backend agnostic queries that run one multiple system.
+Instead of using SQL directly, we can use the Ibis DataFrame library to build backend-agnostic queries that run on multiple systems.
 
 For example, suppose we have a detection query looking through security logs for evidence of an intrusion, such as a process with a specific hash value being executed in our environment. Typically, these logs are stored in S3 or ADSL using file formats like Iceberg or Delta Lake.
 
@@ -93,19 +90,20 @@ let mut df = FheDataFrame::read_csv("process_logs.csv", &public_key).unwrap();
  let c: u32 = counts.decrypt(&client_key);
 ```
 
-As improvement it's probably better to build on top of polars and the add a method to encrypt certain columns (and column names).
-
 ```mermaid
-
 sequenceDiagram
-    participant Client
+    participant Agency as Intelligence Agency (Client)
     participant Server
 
-    Client->>Client: Generate Public Key
-    Client->>Server: Send Public Key and Query
-    Server->>Server: Read DataFrame with some pre-filtering (e.g., time partition).
+    Agency->>Agency: Generate Public Key
+    Agency->>Server: Send Public Key and Query
+    Server->>Server: Read DataFrame with some pre-filtering (e.g., time partition)
     Server->>Server: Perform Encryption using Public Key
-    Server->>Client: Send Encrypted Aggregated State
-    Client->>Client: Decrypt data
-
+    Server->>Server: Execute Query
+    Server->>Agency: Send Encrypted Aggregated State
+    Agency->>Agency: Decrypt Data
 ```
+
+### Improvements 
+
+It's likely better to build on top of Polars and add a method to encrypt certain columns and column names, then it would also be easier to create the Python bindings for needed for ibis to work.
